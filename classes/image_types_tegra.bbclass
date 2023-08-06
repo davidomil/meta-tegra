@@ -1,9 +1,5 @@
 inherit image_types image_types_cboot image_types_tegra_esp python3native perlnative kernel-artifact-names
 
-TEGRA_UEFI_SIGNING_CLASS ??= "tegra-uefi-signing"
-inherit ${TEGRA_UEFI_SIGNING_CLASS}
-TEGRA_UEFI_USE_SIGNED_FILES ??= "false"
-
 IMAGE_TYPES += "tegraflash"
 
 IMAGE_ROOTFS_ALIGNMENT ?= "4"
@@ -29,17 +25,15 @@ def tegra_dtb_extra_deps(d):
     deps = []
     if d.getVar('PREFERRED_PROVIDER_virtual/dtb'):
         deps.append('virtual/dtb:do_populate_sysroot')
-    if d.getVar('TEGRA_UEFI_USE_SIGNED_FILES') == "true":
+    if d.getVar('TEGRA_UEFI_DB_KEY') and d.getVar('TEGRA_UEFI_DB_CERT'):
         deps.append('tegra-uefi-keys-dtb:do_populate_sysroot')
     return ' '.join(deps)
 
-def tegra_bootcontrol_overlay_list(d, bup=False, separator=','):
+def tegra_bootcontrol_overlay_list(d, bup=False):
     overlays = d.getVar('TEGRA_BOOTCONTROL_OVERLAYS').split()
-    if d.getVar('TEGRA_UEFI_USE_SIGNED_FILES') == "true":
-        overlays.append('UefiDefaultSecurityKeys.dtbo')
-        if bup and os.path.exists('UefiUpdateSecurityKeys.dtbo'):
-            overlays.append('UefiUpdateSecurityKeys.dtbo')
-    return separator.join(overlays)
+    if d.getVar('TEGRA_UEFI_DB_KEY') and d.getVar('TEGRA_UEFI_DB_CERT'):
+        overlays.append('UefiUpdateSecurityKeys.dtbo' if bup else 'UefiDefaultSecurityKeys.dtbo')
+    return ','.join(overlays)
 
 IMAGE_ROOTFS_SIZE ?= "${@tegra_default_rootfs_size(d)}"
 
@@ -68,6 +62,7 @@ TEGRAFLASH_ROOTFS_EXTERNAL = "${@'1' if d.getVar('TNSPEC_BOOTDEV') != d.getVar('
 ROOTFS_DEVICE_FOR_INITRD_FLASH = "${@tegra_rootfs_device(d)}"
 TEGRAFLASH_NO_INTERNAL_STORAGE ??= "0"
 OVERLAY_DTB_FILE ??= ""
+USE_UEFI_SIGNED_FILES ?= "${@'true' if d.getVar('TEGRA_UEFI_DB_KEY') and d.getVar('TEGRA_UEFI_DB_CERT') else 'false'}"
 
 TEGRA_EXT4_OPTIONS ?= "-O ^metadata_csum_seed"
 EXTRA_IMAGECMD:append:ext4 = " ${TEGRA_EXT4_OPTIONS}"
@@ -191,26 +186,83 @@ tegraflash_finalize_pkg() {
 }
 
 tegraflash_create_flash_config() {
-    local destfile="$1"
+    :
+}
+
+tegraflash_create_flash_config:tegra194() {
+    local destdir="$1"
     local lnxfile="$2"
     local infile="$3"
 
-    [ -n "$infile" ] || infile="${STAGING_DATADIR}/tegraflash/internal-flash.xml"
+    [ -n "$infile" ] || infile="${STAGING_DATADIR}/tegraflash/${PARTITION_LAYOUT_TEMPLATE}"
 
-    sed \
+    sed -e"s,MB1FILE,mb1_b_t194_prod.bin,2" "$infile" | \
+	sed \
         -e"s,LNXFILE_b,$lnxfile," \
         -e"s,LNXFILE,$lnxfile," -e"s,LNXSIZE,${LNXSIZE}," \
+        -e"s,TEGRABOOT,nvtboot_t194.bin," \
+        -e"s,MTSPREBOOT,preboot_c10_prod_cr.bin," \
+        -e"s,MTS_MCE,mce_c10_prod_cr.bin," \
+        -e"s,MTSPROPER,mts_c10_prod_cr.bin," \
+        -e"s,SCEFILE,sce_t194.bin," \
+        -e"s,MB1FILE,mb1_t194_prod.bin," \
+        -e"s,BPFFILE,bpmp-2_t194.bin," \
+        -e"s,TBCFILE,uefi_jetson.bin," \
+        -e"s,CAMERAFW,camera-rtcpu-t194-rce.img," \
+        -e"s,DRAMECCTYPE,dram_ecc," -e"s,DRAMECCFILE,dram-ecc-t194.bin," -e"s,DRAMECCNAME,dram-ecc-fw," \
+        -e"s,BADPAGETYPE,black_list_info," -e"s,BADPAGEFILE,badpage.bin," -e"s,BADPAGENAME,badpage-fw," \
+        -e"s,SPEFILE,spe_t194.bin," \
+        -e"s,WB0BOOT,warmboot_t194_prod.bin," \
         -e"s,TOSFILE,${TOSIMGFILENAME}," \
         -e"s,EKSFILE,eks.img," \
-        -e"s,RECNAME,recovery," -e"s,RECSIZE,${TEGRA_RECOVERY_KERNEL_PART_SIZE}," -e"s,RECDTB-NAME,recovery-dtb," \
+        -e"s,RECNAME,recovery," -e"s,RECSIZE,${TEGRA_RECOVERY_KERNEL_PART_SIZE}," -e"s,RECDTB-NAME,recovery-dtb," -e"s,BOOTCTRLNAME,kernel-bootctrl," \
         -e"/RECFILE/d" -e"/RECDTB-FILE/d" -e"/BOOTCTRL-FILE/d" \
         -e"s,APPSIZE,${ROOTFSPART_SIZE}," \
         -e"s,RECROOTFSSIZE,${RECROOTFSSIZE}," \
         -e"s,APPUUID_b,," -e"s,APPUUID,," \
 	-e"s,ESP_FILE,esp.img," -e"/VARSTORE_FILE/d" \
 	-e"s,NUM_SECTORS,${TEGRA_EXTERNAL_DEVICE_SECTORS}," \
+        > $destdir/flash.xml.in
+}
+
+tegraflash_create_flash_config:tegra234() {
+    local destdir="$1"
+    local lnxfile="$2"
+    local infile="$3"
+
+    [ -n "$infile" ] || infile="${STAGING_DATADIR}/tegraflash/${PARTITION_LAYOUT_TEMPLATE}"
+
+    sed \
+        -e"s,LNXFILE_b,$lnxfile," \
+        -e"s,LNXFILE,$lnxfile," -e"s,LNXSIZE,${LNXSIZE}," \
+        -e"s,MB1FILE,mb1_t234_prod.bin," \
+        -e"s,CAMERAFW,camera-rtcpu-t234-rce.img," \
+        -e"s,SPEFILE,spe_t234.bin," \
+        -e"s,TOSFILE,${TOSIMGFILENAME}," \
+        -e"s,EKSFILE,eks.img," \
+        -e"s,RECNAME,recovery," -e"s,RECSIZE,${TEGRA_RECOVERY_KERNEL_PART_SIZE}," -e"s,RECDTB-NAME,recovery-dtb," \
+        -e"/RECFILE/d" -e"/RECDTB-FILE/d" -e"/BOOTCTRL-FILE/d" \
+        -e"s,APPSIZE,${ROOTFSPART_SIZE}," \
+        -e"s,RECROOTFSSIZE,${RECROOTFSSIZE}," \
+        -e"s,BADPAGETYPE,black_list_info," -e"s,BADPAGEFILE,badpage.bin," -e"s,BADPAGENAME,bad-page," \
+	-e"s,FSIFW,fsi-fw-ecc.bin," \
+        -e"s,PSCBL1FILE,psc_bl1_t234_prod.bin," \
+        -e"s,TSECFW,," \
+        -e"s,NVHOSTNVDEC,nvdec_t234_prod.fw," \
+        -e"s,MB2BLFILE,mb2_t234.bin," \
+        -e"s,XUSB_FW,xusb_t234_prod.bin," \
+        -e"s,PSCFW,pscfw_t234_prod.bin," \
+        -e"s,MCE_IMAGE,mce_flash_o10_cr_prod.bin," \
+        -e"s,WB0FILE,sc7_t234_prod.bin," \
+        -e"s,PSCRF_IMAGE,psc_rf_t234_prod.bin," \
+        -e"s,MB2RF_IMAGE,mb2rf_t234.bin," \
+        -e"s,TBCDTB-FILE,uefi_jetson_with_dtb.bin," \
+        -e"s,DCE,display-t234-dce.bin," \
+        -e"s,APPUUID_b,," -e"s,APPUUID,," \
+	-e"s,ESP_FILE,esp.img," -e"/VARSTORE_FILE/d" \
+	-e"s,NUM_SECTORS,${TEGRA_EXTERNAL_DEVICE_SECTORS}," \
 	"$infile" \
-        > "$destfile"
+        > $destdir/flash.xml.in
 }
 
 BOOTFILES = ""
@@ -264,7 +316,6 @@ BOOTFILES:tegra234 = "\
     readinfo_t234_min_prod.xml \
     camera-rtcpu-sce.img \
     fsi-fw-ecc.bin \
-    badpage.bin \
 "
 
 copy_dtbs() {
@@ -276,10 +327,10 @@ copy_dtbs() {
             bbnote "Overwriting $destination/$dtbf with KERNEL_DEVICETREE content"
             rm -f $destination/$dtbf $destination/$dtbf.signed
         fi
-        bbnote "Copying KERNEL_DEVICETREE entry $dtbf to $destination"
-        cp -L "${DEPLOY_DIR_IMAGE}/$dtbf" $destination/$dtbf
-	if ${TEGRA_UEFI_USE_SIGNED_FILES}; then
-            cp -L "${DEPLOY_DIR_IMAGE}/$dtbf.signed" $destination/$dtbf.signed
+        bbnote "Copying KERNEL_DEVICETREE entry $dtb to $destination"
+        cp -L "${DEPLOY_DIR_IMAGE}/$dtb" $destination/$dtbf
+	if ${USE_UEFI_SIGNED_FILES}; then
+            cp -L "${DEPLOY_DIR_IMAGE}/$dtb.signed" $destination/$dtbf.signed
 	fi
     done
     if [ -n "${EXTERNAL_KERNEL_DEVICETREE}" ]; then
@@ -291,7 +342,7 @@ copy_dtbs() {
             fi
             bbnote "Copying EXTERNAL_KERNEL_DEVICETREE entry $dtb to $destination"
             cp -L "${EXTERNAL_KERNEL_DEVICETREE}/$dtb" $destination/$dtbf
-	    if ${TEGRA_UEFI_USE_SIGNED_FILES}; then
+	    if ${USE_UEFI_SIGNED_FILES}; then
                 cp -L "${DEPLOY_DIR_IMAGE}/$dtb.signed" $destination/$dtbf.signed
 	    fi
         done
@@ -302,14 +353,13 @@ copy_dtb_overlays() {
     local destination=$1
     local dtb dtbf extdtb
     local extraoverlays=$(echo "${OVERLAY_DTB_FILE}" | sed -e"s/,/ /g")
-    shift
     if [ -n "${IMAGE_TEGRAFLASH_INITRD_FLASHER}" ]; then
         extraoverlays="$extraoverlays L4TConfiguration-rcmboot.dtbo"
     fi
-    if ${TEGRA_UEFI_USE_SIGNED_FILES}; then
+    if ${USE_UEFI_SIGNED_FILES}; then
         extraoverlays="$extraoverlays UefiDefaultSecurityKeys.dtbo"
     fi
-    for dtb in "$@" ${TEGRA_PLUGIN_MANAGER_OVERLAYS} $extraoverlays; do
+    for dtb in ${TEGRA_BOOTCONTROL_OVERLAYS} ${TEGRA_PLUGIN_MANAGER_OVERLAYS} $extraoverlays; do
         dtbf=`basename $dtb`
         if [ -n "${EXTERNAL_KERNEL_DEVICETREE}" ]; then
             local extdtb=$(find "${EXTERNAL_KERNEL_DEVICETREE}" -name $dtbf -printf '%P' 2>/dev/null)
@@ -369,7 +419,7 @@ EOF
         cp $f .
     done
     copy_dtbs "${WORKDIR}/tegraflash"
-    copy_dtb_overlays "${WORKDIR}/tegraflash" ${@tegra_bootcontrol_overlay_list(d, separator=' ')}
+    copy_dtb_overlays "${WORKDIR}/tegraflash"
     if [ "${TEGRA_SIGNING_EXCLUDE_TOOLS}" != "1" ]; then
         cp -R ${STAGING_BINDIR_NATIVE}/${FLASHTOOLS_DIR}/* .
 	if [ -z "${IMAGE_TEGRAFLASH_INITRD_FLASHER}" ]; then
@@ -383,9 +433,12 @@ EOF
     fi
     tegraflash_custom_pre
     cp "${IMAGE_TEGRAFLASH_ROOTFS}" ./${IMAGE_BASENAME}.${IMAGE_TEGRAFLASH_FS_TYPE}
-    tegraflash_create_flash_config flash.xml.in ${LNXFILE}
+    tegraflash_create_flash_config "${WORKDIR}/tegraflash" ${LNXFILE}
     if [ "${TEGRAFLASH_ROOTFS_EXTERNAL}" = "1" ]; then
-        tegraflash_create_flash_config external-flash.xml.in ${LNXFILE} ${STAGING_DATADIR}/tegraflash/external-flash.xml
+        rm -rf "${WORKDIR}/tegraflash/external" external-flash.xml.in
+	mkdir "${WORKDIR}/tegraflash/external"
+        tegraflash_create_flash_config "${WORKDIR}/tegraflash/external" ${LNXFILE} ${STAGING_DATADIR}/tegraflash/${PARTITION_LAYOUT_EXTERNAL}
+	mv external/flash.xml.in ./external-flash.xml.in
     fi
     rm -f doflash.sh
     cat > doflash.sh <<END
@@ -409,7 +462,7 @@ DEFAULTS[BOARDSKU]="${TEGRA_BOARDSKU}"
 DEFAULTS[BOARDREV]="${TEGRA_BOARDREV}"
 DEFAULTS[fuselevel]="fuselevel_production"
 DTBFILE="${DTBFILE}"
-EMMC_BCTS="${EMMC_BCTS}"
+EMMC_BCTS="${EMMC_BCT}${@',' + d.getVar('EMMC_BCT_OVERRIDE') if d.getVar('EMMC_BCT_OVERRIDE') else ''}"
 ODMDATA="${ODMDATA}"
 LNXFILE="${LNXFILE}"
 ROOTFS_IMAGE="${IMAGE_BASENAME}.${IMAGE_TEGRAFLASH_FS_TYPE}"
@@ -497,7 +550,7 @@ EOF
         cp $f .
     done
     copy_dtbs "${WORKDIR}/tegraflash"
-    copy_dtb_overlays "${WORKDIR}/tegraflash" ${@tegra_bootcontrol_overlay_list(d, separator=' ')}
+    copy_dtb_overlays "${WORKDIR}/tegraflash"
     if [ "${TEGRA_SIGNING_EXCLUDE_TOOLS}" != "1" ]; then
         cp -R ${STAGING_BINDIR_NATIVE}/${FLASHTOOLS_DIR}/* .
 	if [ -z "${IMAGE_TEGRAFLASH_INITRD_FLASHER}" ]; then
@@ -512,9 +565,12 @@ EOF
     fi
     tegraflash_custom_pre
     cp "${IMAGE_TEGRAFLASH_ROOTFS}" ./${IMAGE_BASENAME}.${IMAGE_TEGRAFLASH_FS_TYPE}
-    tegraflash_create_flash_config flash.xml.in ${LNXFILE}
+    tegraflash_create_flash_config "${WORKDIR}/tegraflash" ${LNXFILE}
     if [ "${TEGRAFLASH_ROOTFS_EXTERNAL}" = "1" ]; then
-        tegraflash_create_flash_config external-flash.xml.in ${LNXFILE} ${STAGING_DATADIR}/tegraflash/external-flash.xml
+        rm -rf "${WORKDIR}/tegraflash/external" external-flash.xml.in
+	mkdir "${WORKDIR}/tegraflash/external"
+        tegraflash_create_flash_config "${WORKDIR}/tegraflash/external" ${LNXFILE} ${STAGING_DATADIR}/tegraflash/${PARTITION_LAYOUT_EXTERNAL}
+	mv external/flash.xml.in ./external-flash.xml.in
     fi
     rm -f doflash.sh
     cat > doflash.sh <<END
@@ -538,7 +594,7 @@ DEFAULTS[BOARDSKU]="${TEGRA_BOARDSKU}"
 DEFAULTS[BOARDREV]="${TEGRA_BOARDREV}"
 DEFAULTS[fuselevel]="fuselevel_production"
 DTBFILE="${DTBFILE}"
-EMMC_BCTS="${EMMC_BCTS}"
+EMMC_BCTS="${EMMC_BCT}${@',' + d.getVar('EMMC_BCT_OVERRIDE') if d.getVar('EMMC_BCT_OVERRIDE') else ''}"
 ODMDATA="${ODMDATA}"
 LNXFILE="${LNXFILE}"
 ROOTFS_IMAGE="${IMAGE_BASENAME}.${IMAGE_TEGRAFLASH_FS_TYPE}"
@@ -635,7 +691,15 @@ oe_make_bup_payload() {
     # BUP generator really wants to use 'boot.img' for the LNX
     # partition contents
     cp $1 ./boot.img
-    tegraflash_create_flash_config flash.xml.in boot.img ${STAGING_DATADIR}/tegraflash/bupgen-internal-flash.xml
+    # BUP generator must have a layout that includes kernel/DTB/etc.
+    # When those partitions are stripped from the main layout, we
+    # create a copy of the original with 'bupgen-' prefix, so use
+    # that if present.
+    local layoutsrc
+    if [ -e "${STAGING_DATADIR}/tegraflash/bupgen-${PARTITION_LAYOUT_TEMPLATE}" ]; then
+        layoutsrc="${STAGING_DATADIR}/tegraflash/bupgen-${PARTITION_LAYOUT_TEMPLATE}"
+    fi
+    tegraflash_create_flash_config "${WORKDIR}/bup-payload" boot.img "$layoutsrc"
     cp "${STAGING_DATADIR}/tegraflash/bsp_version" .
     cp "${STAGING_DATADIR}/tegraflash/${EMMC_BCT}" .
     if [ "${SOC_FAMILY}" = "tegra194" ]; then
@@ -674,7 +738,7 @@ EOF
     fi
     . ./flashvars
     copy_dtbs "${WORKDIR}/bup-payload"
-    copy_dtb_overlays "${WORKDIR}/bup-payload" ${@tegra_bootcontrol_overlay_list(d, bup=True, separator=' ')}
+    copy_dtb_overlays "${WORKDIR}/bup-payload"
     if [ -n "${NVIDIA_BOARD_CFG}" ]; then
         cp "${STAGING_DATADIR}/tegraflash/board_config_${MACHINE}.xml" .
         boardcfg=board_config_${MACHINE}.xml
